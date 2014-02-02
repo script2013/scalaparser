@@ -1,34 +1,13 @@
 package parsers
 
+object Parsers {
 import scala.util
 import java.util.Scanner
 import scala.util.matching.Regex
 import scala.annotation.tailrec
 import scala.collection.mutable.ArrayBuffer
-
-class ArrayCharSequence(arrStart: Int, arrEnd: Int, arr: Array[Char]) extends CharSequence{
-  val len = arrEnd - arrStart
   
-  override def length() = len
-  
-  override def charAt(index: Int): Char = {
-    val pos = arrStart + index
-    if (pos >= arrEnd)
-      throw new IndexOutOfBoundsException()
-    arr(pos) 
-  }
-  
-  override def subSequence(start: Int, end: Int) = { 
-    //to do:
-    new ArrayCharSequence(start + arrStart, end + arrStart, arr)
-  }
-  
-  override def toString: String = arr.slice(arrStart, arrEnd).mkString
-}
-
-object Parsers {
-
-  case class ParserState(buffer: Array[Char], inputPos: Int) {
+  case class ParserState(buffer: ArrayCharSequence, inputPos: Int) {
     val pos = getNonWhitespacePos(inputPos)
     
     def matchEOF: Option[ParserState] = {
@@ -62,9 +41,32 @@ object Parsers {
     
     def getNonWhitespacePos(pos: Int): Int = {
       var i = pos
-      while(i < buffer.length && {val ch = buffer(i); ch == ' ' || ch == '\t'}){
+      //to do: move to separate method
+      while(i < buffer.length && {val ch = buffer(i); ch == ' ' || ch == '\t' || ch == '\r' || ch == '\n'}){
         i += 1
       }
+      if (i + 1 < buffer.length && buffer(i) == '/' && buffer(i + 1) == '*'){
+    	  i += 2
+      
+    	  var done = false
+	      while (i + 1 < buffer.length && !done){
+	        if (buffer(i) == '*' && buffer(i + 1) == '/'){
+	          i += 2;
+	          done = true;
+	        }
+	        else{
+	          i += 1
+	        }
+	      }
+	  
+	      //to do: move to separate method
+	      while(i < buffer.length && {val ch = buffer(i); ch == ' ' || ch == '\t' || ch == '\r' || ch == '\n'}){
+	        i += 1
+	      }        
+      }
+      
+
+      
       i
     }
     
@@ -79,8 +81,8 @@ object Parsers {
         }
         
         try{
-          val subArray = buffer.slice(pos, i).mkString
-          val value = Integer.parseInt(subArray)
+          val intSubstr = buffer.subSequence(pos, i).toString
+          val value = Integer.parseInt(intSubstr)
           Some(newState(i), value)
         }
         catch{
@@ -90,12 +92,53 @@ object Parsers {
     }
     
     def matchRegex(pattern: Regex): Option[(ParserState, String)] = {
-        val subSeq = new ArrayCharSequence(pos, buffer.length, buffer)
+        val subSeq = buffer.subSequence(pos, buffer.length)
         //val subSeq = buffer.slice(pos, buffer.length).mkString
         pattern.findPrefixOf(subSeq) match {
           case Some(value) => Some(newState(pos + value.length()), value)
           case None => None
         }
+    }
+    
+    def matchQuotedString(): Option[(ParserState,String)] = {
+    	println("matchQuotedString")
+        var i = pos
+        if (i < buffer.length && buffer(i) == '"'){
+        	i += 1;
+        	val (notDone, success, error) = (0,1,2)
+        	var flag = notDone
+        	val sb = new StringBuilder()
+	        while (i < buffer.length && flag == notDone){
+	        	if (buffer(i) == '\\'){
+	        		i += 1;
+	        		flag = error
+	        		if (i < buffer.length){
+	        			val ch = buffer(i)
+	        			if (ch == 'n' || ch == '"'){
+	        			  sb.append(if (ch == 'n') '\n' else ch)
+	        			  i += 1;
+	        			  flag = notDone
+	        			}
+	        		} 
+	        		
+	        	}
+	        	else if (buffer(i) == '"'){
+	        	  flag = success
+	        	   i += 1
+	        	}
+	        	else{
+	        	  sb.append(buffer(i))
+	        	  i += 1
+	        	}
+	        }
+        	if (flag == success){
+        		Some(newState(i), sb.toString())
+        	}
+        	else
+        	  None
+        }
+        else 
+          None
     }
 
     def newState(pos: Int) = ParserState(buffer, pos)
@@ -103,359 +146,96 @@ object Parsers {
 
   object ParserState {
     def init(input: String): ParserState = {
-      ParserState(input.toCharArray, 0)
+      ParserState(ArrayCharSequence.fromString(input), 0)
     }
   }
 
-  trait Expr
-  case class Number(val value: Int) extends Expr
-  case class Ident(val name: String) extends Expr
-  
-  case class BinOp(val name: String, val operand1: Expr, val operand2: Expr) extends Expr
-  case class UnaryOp(val name: String, val operand: Expr) extends Expr
-  case class TupleN(val operands: List[Expr]) extends Expr
-  case class FunApp(val expr: Expr, val operands: List[Expr]) extends Expr{
-    //def this(name: Expr) = this(name, List())
-  }
-  case class AnonFun(val paramNames: List[String], val body: Expr) extends Expr
-  
-  def exprParser() = {
-    val pIdent: Parser[Expr] = pRegexp("""[a-zA-Z]+""").bind(ident => pReturn(Ident(ident)))
-    var pExpr: Parser[Expr] = null
-    val pNumber: Parser[Expr] = pInt.bind(num => pReturn(Number(num)))
-    val pUnaryOp: Parser[Expr] = 
-        pString("-").bind(unaryOpName =>
-        pExpr.bind(expr =>
-        pReturn(UnaryOp(unaryOpName,expr))))
-    
-    val bracketedExpr = pString("(").bind(_ =>
-                        pExpr.bind(expr =>
-                        pString(")").bind(_ =>
-                        pReturn(expr))))
-                        
-    val pFactor: Parser[Expr] = pChoice4(pIdent, pNumber, pUnaryOp, bracketedExpr)
-    
-    val pMultDiv = pChoice2(pString("*"), pString("/"))
-    
-    //pTerm = 
-    /*
-    def pTermParser(input: Option[(String, Expr)]): Parser[Expr] = {
-            def mkBinOp(expr: Expr) = 
-              input match {case Some((opName, expr0)) => BinOp(opName, expr0, expr)
-                           case None => expr}  
-            pFactor.bind(fac =>
-            pChoice2(pMultDiv.bind(opName => 
-                     pTermParser(Some(opName, mkBinOp(fac)))),
-                     pReturn(mkBinOp(fac))))}*/
-    
-    /*
-    def pLoopParser(pBaseParser: Parser[Expr], pOpParser: Parser[String]) = {
-      def loop (input: Option[(String, Expr)]): Parser[Expr] = {
-            def mkBinOp(expr: Expr) = 
-              input match {case Some((opName, expr0)) => BinOp(opName, expr0, expr)
-                           case None => expr}  
-            pBaseParser.bind(fac =>
-            pChoice2(pOpParser.bind(opName => 
-                     loop(Some(opName, mkBinOp(fac)))),
-                     pReturn(mkBinOp(fac))))}
-      loop _}
-    */
-    
-    def pRecSkel(pBaseParser: Parser[Expr], pOpParser: Parser[String]): Parser[Expr] =
-        pBaseParser.bind(baseResult => {
-        var expr: Expr = baseResult
-        pWhile (pOpParser) (opName => 
-                pBaseParser.bind(expr2 =>{
-                expr = BinOp(opName, expr, expr2)
-                pReturn(())})).bind(res =>
-        pReturn(expr))})
-    /*
-        val!  baseResult = pBaseParser
-        var expr: Expr = baseResult
-        pWhile (val! opName = pOpParser){
-          val! expr2 = pBaseParser
-          expr = BinOp(opName, expr, expr2)
-        }
-        return(expr)
-     */
-    val pTermParser = pRecSkel(pFactor,pMultDiv)
-    
-    val pTerm: Parser[Expr] = pTermParser // (None)
-    val pPlusMinus = pChoice2(pString("+"), pString("-"))
-    /*
-    pExpr = pTerm.bind(term =>
-            pChoice(pPlusMinus.bind(opName =>
-                    pExpr.bind(expr => pReturn(BinOp(opName, term, expr)))),
-                    pReturn(term)))
-    */                
-    val pExprParser = pRecSkel(pTerm, pPlusMinus)
-    pExpr = pExprParser //(None)
-    
-    val pFullExpr = pExpr.bind(expr => pEOF.bind(_ => pReturn(expr)))
-    
-    def parseExpr(input: String) = run(pFullExpr)(input)
-    val r = parseExpr("sin()* ")
-    println("Expr: " + r)
-    ()
-  }
 
-  def exprParser1() = {
-    val (pExprRef, pExpr) = pRef[Expr]()
-    //var pExprRef: Parser[Expr] = null //forward ref
-    //def pExpr = pExprRef
+  case class ParserError(pos: Int, stack: List[String]){
+    def printMessage(input: String){
+    	def defaultIfNotFound(defaultValue: Int, value: Int) = if (value == -1) defaultValue else value
+    	val startPos = 1 + input.lastIndexOf("\n", pos)
+    	val untilPos = defaultIfNotFound(input.length, input.indexOf("\n", pos))
+    	println("Error at pos: " + pos)
+    	println(input.substring(startPos, untilPos))
     
-    
-    val pIdentName = pRegexp("""[a-zA-Z]+""")
-    val pIdent: Parser[Expr] = pIdentName.bind(ident => pReturn(Ident(ident)))
-
-    val pComma: Parser[Unit] = pString(",").bind(_ => pReturn(()))
-    val pOpenBracket = pString("(")
-    val pCloseBracket = pString(")")
-
-    /*
-    val pFunApp: Parser[Expr] = 
-      pIdentName.bind(name =>  //ident
-      pOpenBracket.bind(_ =>   //(
-      pChoice2(pCloseBracket.bind(_ => pReturn(new FunApp(name))), //if ) then done
-               pSepBy1(pExpr, pComma).bind(exprs =>
-               pCloseBracket.bind(_ => 
-               pReturn(FunApp(name, exprs)))))))
-    */
-    
-    def pCommaSep[A](expr: Parser[A]): Parser[List[A]] = {
-               val manyArgs =  pSepBy1(expr, pComma).bind( exprs =>
-                               pCloseBracket.bind(_ =>
-                               pReturn(exprs) ) )
-               pChoice2(pCloseBracket.bind(_ => pReturn(List())), //if ) then done
-                        manyArgs) }
-      
-    def pFunAppArgs: Parser[List[Expr]] = pCommaSep(pExpr)
-      
-    def pKeyword(kw: String) = pIdentName.bind(name => if (name == kw) pReturn(Unit) else pFail(kw))
-    
-    def anonFunc = {
-      pKeyword("fun").bind(_ =>
-      pOpenBracket.bind(_ =>
-      pCommaSep(pIdentName).bind(params =>
-      pString("->").bind(_ =>
-      pExpr.bind(expr =>
-      pReturn(AnonFun(params, expr)))))))
+    	val fixedPos = pos //if (pos < input.length && input(pos) == ' ') input.lastIndexWhere(ch => ch != ' ', pos) else pos
+    	  //if (pos > 0) (1 + input.lastIndexWhere(ch => ch != ' ', pos - 1)) else pos
+    	for(i <- startPos until fixedPos){
+    	  print(".")
+    	}
+    	println("^")
+    	println("Expected: " + stack.reverse.mkString(", "))
     }
-  
-    /*
-    val pFunAppOrIdent: Parser[Expr] = 
-      pIdentName.bind(name =>  //ident
-      pIf(pOpenBracket.bind(_=> pReturn(Unit)),
-         pFunAppArgs.bind(args => pReturn(FunApp(Ident(name), args))),
-         pEmpty.bind(_=> pReturn(Ident(name))) ) )
-    */
-    
-    val pNumber: Parser[Expr] = pInt.bind(num => pReturn(Number(num)))
-
-    val pUnaryOp: Parser[Expr] = 
-        pString("-").bind(unaryOpName =>
-        pExpr.bind(expr =>
-        pReturn(UnaryOp(unaryOpName,expr))))
-
-    def pExpon(pFactor: Parser[Expr]): Parser[Expr] = 
-        pFactor.bind(expr =>
-        pIf(pString("^"),
-            pExpr.bind(power=> pReturn(BinOp("exp", expr, power))),
-            pEmpty.bind(_ => pReturn(expr))))
-        
-    val bracketedExpr = pString("(").bind(_ =>
-                        pExpr.bind(expr =>
-                        pString(")").bind(_ =>
-                        pReturn(expr))))
-                        
-    val bracketedExprOrTuple =
-      pString("(").bind(_ =>
-      pFunAppArgs.bind(exprs => {
-      val expr = if (exprs.length == 1) exprs(0) else TupleN(exprs)
-      pReturn(expr)}))
-      
-    val pFactor: Parser[Expr] = pChoice5(anonFunc, pIdent /* pFunAppOrIdent*/, pNumber, pUnaryOp, bracketedExprOrTuple)
-    //def pFactor: Parser[Expr] = pExpon(pFactor0) // pChoice5(anonFunc, pFunAppOrIdent, pNumber, pUnaryOp, bracketedExprOrTuple)
-    
-    def pRecSkel(pBaseParser: Parser[Expr], pOpParser: Parser[String]): Parser[Expr] = {
-    /*  val  baseResult = parse(pBaseParser)
-        var expr: Expr = baseResult
-        pWhile (val opName = parse(pOpParser)){
-          val expr2 = parse(pBaseParser)
-          expr = BinOp(opName, expr, expr2)
-        }
-        return(expr)
-     */
-      pBaseParser.bind(baseResult => {
-        var expr: Expr = baseResult
-        pWhile (pOpParser) (opName => 
-                pBaseParser.bind(expr2 =>{
-                expr = BinOp(opName, expr, expr2)
-                pReturn(())})).bind(res =>
-        pReturn(expr))})
-    }
-
-    def pRecFunApp(pBaseParser: Parser[Expr], pNextParser: Parser[List[Expr]], pOpParser: Parser[String]): Parser[Expr] = {
-    /*  val  baseResult = parse(pBaseParser)
-        var expr: Expr = baseResult
-        pWhile (val opName = parse(pOpParser)){
-          val expr2 = parse(pBaseParser)
-          expr = BinOp(opName, expr, expr2)
-        }
-        return(expr)
-     */
-      pBaseParser.bind(baseResult => {
-        var expr: Expr = baseResult
-        pWhile (pOpParser) (opName => 
-                pNextParser.bind(expr2 =>{
-                expr = FunApp(expr, expr2) //BinOp(opName, expr, expr2)
-                pReturn(())})).bind(res =>
-        pReturn(expr))})
-    }
-    
-    //val pExp =pString("^")
-    val pExpTerm = pRecFunApp(pFactor, pFunAppArgs, pOpenBracket) //pRecSkel(pFactor,pExp)
-    
-    val pMultDiv = pChoice2(pString("*"), pString("/"))
-    val pPlusMinus = pChoice2(pString("+"), pString("-"))
-    
-    val pTerm = pRecSkel(pExpTerm /*pFactor*/,pMultDiv)
-    val pResolvedExpr = pRecSkel(pTerm, pPlusMinus)
-    //leftAssoc(leftAssoc(leftAssoc(..., funApp), 
-    pExprRef.set(pResolvedExpr)
-    
-    val pFullExpr = pExpr.bind(expr => pEOF.bind(_ => pReturn(expr)))
-
-
-    /*
-    val res = pChoice2({for (_ <- pCloseBracket) yield Ident("a")},
-                      {for (_ <- pCloseBracket) yield Ident("")});
-    
-    def pFunApp = for(
-      name <- pIdentName;
-      _ <- pOpenBracket;
-    ) yield res; // {notImpl()}
-    */
-    /*
-    val pFunApp = 
-      pIdentName.bind(name =>  //ident
-      pOpenBracket.bind(_ =>   //(
-      pChoice2(pCloseBracket.bind(_ => pReturn(new FunApp(name))), //if ) then done
-              { val args = ArrayBuffer[Expr]()
-                pExpr.bind(expr => { //parse expr
-                args += expr
-                pWhile(pString(","))(_ => //
-                pExpr.bind(expr => {
-                args += expr
-                pReturn(Unit) } ) ) } ).bind(_ =>
-                pCloseBracket.bind(_ =>
-                pReturn(FunApp(name, args.toList) )  
-                ) ) } ) ) )
-
-    */
-    //(...)(...)(...)
-    //[], {a -> b, c -> d}
-    def parseExpr(input: String) = run(pFullExpr)(input)
-    val r = parseExpr("(fun (a, c) -> fun (b) -> (a+5,b,c))(1,3)(2)") //"(fun (a) -> a + b)(1,2)") //("f(1,(2 + 1, 3))") //("b + f(a, g(c)) ")
-
-    println("Expr: " + r)
-  }
- 
-  
-  def test() {
-    val s = ParserState.init("input")
-    println("regex" + s.matchRegex("input".r))
-    
-    val p1 = pString("inp")
-    val p2 = pString("ut")
-    val p3 = p1 ==> p2 ==> p1 //chain(p1,p2)
-    def f(xy: (Unit, Unit)): Unit = ()
-    //val p4 = map(p3, f)
-    //java.lang.Integer.parseInt(arg0)
-    val p5 = pString("inp").bind(result0 =>
-             pString("up").bind(result1 =>
-             pReturn((result0, result1))))
-               
-    val p4 = p3 map (_ => Unit) // ((xy: (Unit,Unit)) => Unit)
-    val r = run(p5)("input")
-    val l = List(1)
-   
-    val x: Parser[Unit] = 
-      for(
-          r0 <- pString("inp");
-          r1 <- pString("up")) 
-      yield 
-        {(r0, r)}
-    
-    //val s0 = ParserState.init("-2-101s")
-    //println(s0.matchInt())
-    val pPlus = pString("+")
-    val pMinus = pString("-")
-    val pOp = pChoice2(pPlus, pMinus)
-    val ident = pRegexp("""[a-zA-Z]+""")
-    
-    val p6 = for(
-      a <- ident;
-      op <- pOp;
-      b <- ident
-    )
-    yield {(op, a, b)}
-    
-    val r6 = run(p6) ("a + b") //"("a - -6")
-    println(r6)  
-    //println(run(x)("input"))
-
-    /*
-    val q = "xinpu".toCharArray
-    val res = s.matchString(q)
-    println(res)
-
-    val x: Option[ParserState] = s.matchString("".toCharArray())
-    x match  {
-      case Some(newState) => ParserSuccess((), newState)
-      case None => failWith(s.pos, "pString")
-    } 
-    */
   }
 
-  case class ParserError(pos: Int, msg: String)
+  sealed abstract class ParserResult[+A]{
+    def success: A
+    def failure: ParserError
+    def isSuccess: Boolean
+  }
+  
+  
 
-  sealed abstract class ParserResult[+A]
+  final case class ParserSuccess[+A](result: A, next: ParserState) extends ParserResult[A]{
+        def success: A = result
+        def failure: ParserError = throw new Exception("parser succeeded")
+        def isSuccess = true
+  }
 
-  final case class ParserSuccess[+A](result: A, next: ParserState) extends ParserResult[A]
-
-  final case class ParserFailure(error: ParserError) extends ParserResult[Nothing]
-
-  def failWith(pos: Int, message: String): ParserResult[Nothing] = ParserFailure(ParserError(pos, message))
-  def notImpl() = failWith(0, "na")
+  final case class ParserFailure(error: ParserError) extends ParserResult[Nothing]{
+        def success: Nothing = throw new Exception("Parser failed at pos " + error.pos + " with errors: " + error.stack.reverse.mkString(", "))
+        def failure: ParserError = error
+        def isSuccess = false
+  }
+  
+  def mergeFailures[A <: C, B <: C, C](prevError: ParserResult[A], lastError: ParserResult[B]): ParserResult[C] = {
+	if (prevError.failure.pos < lastError.failure.pos){
+		 lastError
+	}
+	else if (prevError.failure.pos > lastError.failure.pos){
+		prevError
+	}
+	else{
+		val stack = prevError.failure.stack ++ lastError.failure.stack
+		ParserFailure(ParserError(Math.max(prevError.failure.pos, lastError.failure.pos), stack))
+	}
+  }
+  
+  def failWith(pos: Int, trace: String): ParserResult[Nothing] = ParserFailure(ParserError(pos, List(trace)))
+  def failWith0(pos: Int): ParserResult[Nothing] = ParserFailure(ParserError(pos, List()))
+  
+  def notImpl() = failWith(0, "notImpl")
 
   case class Parser[+A](code: ParserState => ParserResult[A]) {
     def run(state: ParserState): ParserResult[A] = code(state)
     
     def map[B](f: A => B): Parser[B] = Parsers.map(this, f)
     
-    def ==>[B](p2: Parser[B]): Parser[(A,B)] = Parsers.chain(this, p2)
-   
     def bind[B](f: A => Parser[B]): Parser[B] = Parser(state =>
        run(state) match {
-        case ParserSuccess(result, nextState) => f(result).run(nextState)
-        case failure@ParserFailure(_) => failure
+        case ParserSuccess(result, nextState) => {
+          //println("->" + result + " state:" + nextState.inputPos)
+          f(result).run(nextState)
+        }
+        case failure@ParserFailure(ParserError(pos,msg)) => {
+          //println("Failure: " + msg.mkString(", ") + " state:" + pos)
+          failure
+        }
        })
        
     def flatMap[B](f: A => Parser[B]):  Parser[B] = bind(f)
-   
-
-       
+    def ==>[B](p2: Parser[B]): Parser[(A,B)] = Parsers.chain(this, p2)
   }
   
   class ParserRef[A](){
-    var p: Parser[A] = null
+    var p: Parser[A] = Parser(state => this.get.run(state))
     def get = p
     def set(p: Parser[A]){this.p = p}
   }  
 
   def pReturn[A](value: A): Parser[A] = Parser(state => ParserSuccess(value, state))
-  def pFail(msg: String): Parser[Nothing] = Parser(state => ParserFailure(ParserError(state.pos, msg)))
+  def pFail(msg: String): Parser[Nothing] = Parser(state => ParserFailure(ParserError(state.pos, List(msg))))
   /*
   def pWhile1[A] (cond: Parser[A]) (body: A => Parser[Unit]): Parser[Unit] =  Parser(state =>
      cond.run(state) match {
@@ -472,20 +252,33 @@ object Parsers {
   
   def pRef[A](): (ParserRef[A], Parser[A]) = {
     val pRef = new ParserRef[A]
-    (pRef, Parser(state => pRef.get.run(state)))
-  }
+    (pRef, pRef.get)}
   
-  
+  /*
   def pSepBy1[A] (pItem: Parser[A], pSep: Parser[Unit]): Parser[List[A]] =
                 pItem.bind(expr => { //parse expr
                 val args = ArrayBuffer[A]()
                 args += expr
-                (pWhile(pSep)(_ => //
+                (pWhile0 ("pSepBy1") (pSep)(_ => //
                 pItem.bind(expr => {
                 args += expr
-                pReturn(Unit) } ) )).bind(_ => pReturn(args.toList) ) } )
-     
-  def pWhile[A] (cond: Parser[A]) (body: A => Parser[Unit]): Parser[Unit] = { 
+                pReturn(Unit) } ) )).bind(_ => pReturn(args.toList) ) } )*/
+   
+  def not[A](p: Parser[A]): Parser[Unit] = Parser(state =>
+  	p.run(state) match{
+  	case ParserSuccess(_,_) => ParserFailure(ParserError(state.pos, List()))
+  	case ParserFailure(_) => ParserSuccess(Unit, state)
+  	}
+  )
+  
+  def lookAhead[A](p: Parser[A]): Parser[Unit] = Parser(state =>
+  	p.run(state) match{
+  	case ParserSuccess(_,_) => ParserSuccess(Unit, state) // ParserFailure(ParserError(state.pos, List()))
+  	case failure@ParserFailure(_) => failure //ParserSuccess(Unit, state)
+  	}
+  )
+  
+  def pWhileInternal[A] (name: String) (cond: Parser[A]) (body: A => Parser[Unit]): Parser[Unit] = { 
       @tailrec
       def loop(state: ParserState): ParserResult[Unit] = 
         cond.run(state) match {
@@ -494,15 +287,58 @@ object Parsers {
                       case ParserSuccess(_, nextStateBody) => loop(nextStateBody)
                       case failure@ParserFailure(_) => failure
                   }
-          case failure@ParserFailure(_) => ParserSuccess((), state) 
+          case failure@ParserFailure(_) => {
+        	  //println("while: " + name + " pos: " + state.pos)
+        	  ParserSuccess((), state) 
+          }
         }
       Parser(loop)}
 
-  /*
+  def pWhileList[A,B] (name: String) (cond: Parser[A]) (body: A => Parser[B]): Parser[List[(A,B)]] = { 
+	    pEmpty.bind(_ =>
+	    {val res = ArrayBuffer[(A,B)]()
+		 (pWhileInternal (name) (cond) (it0 =>
+		   				       body(it0).
+		   				       bind(item => 
+			  		           {res += ((it0,item)); 
+			  		           pReturn()}))).
+	     bind(_=> pReturn(res.toList))}) 
+	  }
+     
+  def pWhile[B] (cond: Parser[Unit]) (body: Parser[B]): Parser[List[B]] = { 
+	    pEmpty.bind(_ =>
+	    {val res = ArrayBuffer[B]()
+		 (pWhileInternal ("") (cond) (it0 =>
+		   				       body.bind(item => 
+			  		           {res += item; 
+			  		           pReturn()}))).
+	     bind(_=> pReturn(res.toList))}) 
+	  }
+  
+  def pMany0[A] (p: Parser[A]): Parser[List[A]] =
+  /*{
+    pEmpty.bind(_ =>
+    {val res = ArrayBuffer[A]()
+	(pWhile ("many0") (p) (item => {res += item; pReturn(())})).bind(_=> pReturn(res.toList))}) 
+  }*/
+  
+  //def pWhile[A] (name: String) (cond: Parser[A]) (body: A => Parser[Unit]): Parser[Unit] = 
+	  { 
+	      @tailrec
+	      def loop(state: ParserState,lst: List[A]): ParserResult[List[A]] = 
+	          p.run(state) match {
+	              case ParserSuccess(res, nextStateBody) => loop(nextStateBody, lst ++ List(res))
+	              case failure@ParserFailure(_) => failure
+	          }
+          Parser(s => loop(s, List()))
+     }  
+/*
   def pDoWhile[A] (body: Parser[A]) (cond: Parser[Unit]) = {
     
   }*/
   
+  //to do: leave after pChoice(?*)
+  /*
   def pChoice2[A <: C, B <: C, C](p0: Parser[A], p1: Parser[B]): Parser[C] = Parser(state =>
         p0.run(state) match {
           case success@ParserSuccess(_, _) => success
@@ -512,7 +348,7 @@ object Parsers {
               case ParserFailure(error1) => ParserFailure(error1)
             }
         })
-
+   */
         
   //def pIf[C, A <: R, B <: R, R] (pCond: Parser[C], pTrue: C -> Parser[A], pFalse: Parser[B]): Parser[R] = 
         
@@ -524,7 +360,7 @@ object Parsers {
         }      
     )
     
-  
+  /*
   def pChoice3[A0 <: R, A1 <: R, A2 <: R, R](p0: Parser[A0], p1: Parser[A1], p2: Parser[A2]): Parser[R] =
     pChoice2(p0, pChoice2(p1, p2))
  
@@ -533,36 +369,57 @@ object Parsers {
 
   def pChoice5[A0 <: R, A1 <: R, A2 <: R, A3 <: R, A4 <: R, R](p0: Parser[A0], p1: Parser[A1], p2: Parser[A2], p3: Parser[A3], p4: Parser[A4]): Parser[R] =
     pChoice2(p0, pChoice4(p1, p2, p3, p4))   
-    
+   */
   def pChoice[A](ps: Parser[A]*): Parser[A] = Parser(state => {
+    //val state = state0.newState(state0.pos)
     val iter = ps.iterator
-    var result: ParserResult[A] = failWith(state.pos, "pChoice")
+    
+    var result: ParserResult[A] = failWith0(state.pos)
     var done = false
+    
     while (!done && iter.hasNext){
       val p = iter.next()
       p.run(state) match {
         case success@ParserSuccess(_,_) => {done = true; result = success}
-        case ParserFailure(error) => {/*merge erros*/}
+        case failure@ParserFailure(error) => {
+
+        	  result = mergeFailures(result, failure)
+
+        }
       } 
     }
-    result})
+    result match{
+      case success@ParserSuccess(_,_) => success
+      case failure@ParserFailure(ParserError(pos, msgs)) => ParserFailure(ParserError(pos, msgs.distinct))
+    }
+    //result
+    })
+  
+  def pSetLastError[A](msg: String, p: Parser[A]): Parser[A] = Parser(state =>
+  	p.run(state) match{
+  	  case success@ParserSuccess(result, state) => success
+      case ParserFailure(error) => ParserFailure(ParserError(error.pos, /*error.stack ++ */List(msg)))
+  	})
   
   def pString(expected: String): Parser[String] = {
     val expectedArr = expected.toCharArray()
     Parser(state => 
       state.matchString(expectedArr) match {
           case Some(newState) => ParserSuccess(expected, newState)
-          case None => failWith(state.pos, "pString")
+          case None => failWith(state.pos, expected)
       }
     )
   }
+  
+  def pStringIgnore(expected: String) = pString(expected).bind(_=> pReturn(()))
 
   val pEmpty: Parser[Unit] = Parser(state => ParserSuccess((), state))
+  
   
   val pEOF: Parser[Unit] = Parser(state => 
       state.matchEOF match {
           case Some(newState) => ParserSuccess((), newState)
-          case None => failWith(state.pos, "pEOF")
+          case None => failWith(state.pos, "end of file")
       }
     )
     
@@ -571,7 +428,7 @@ object Parsers {
     Parser(state => 
       state.matchRegex(pattern) match {
           case Some((newState, found)) => ParserSuccess(found, newState)
-          case None => failWith(state.pos, "pString")
+          case None => failWith(state.pos, "pRegexp(" + regexp + ")")
       }
     )
   }
@@ -582,6 +439,13 @@ object Parsers {
           case Some((newState,value)) => ParserSuccess(value, newState)
           case None => failWith(state.pos, "pInt")
       })
+ 
+  val pQuotedString: Parser[String] =
+    Parser(state => 
+      state.matchQuotedString match {
+          case Some((newState,value)) => ParserSuccess(value, newState)
+          case None => failWith(state.pos, "quoted string")
+      })      
   
   val pWhitespaceAny = Parser(state =>
     ParserSuccess((), state.skipWhiteSpace)
@@ -605,7 +469,7 @@ object Parsers {
 
     
   def run[A](parser: Parser[A])(input: String): ParserResult[A] = {
-    val state = ParserState(input.toCharArray(), 0)
+    val state = ParserState(ArrayCharSequence.fromString(input), 0)
     parser.run(state)
     //failWith(0, "")
   }
