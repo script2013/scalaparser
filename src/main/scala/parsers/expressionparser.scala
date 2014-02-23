@@ -3,15 +3,23 @@ package parsers
 object ExpressionParser{
   import Parsers._
   
-  abstract class Pattern
+  trait ParsedNode{
+	  private[this] var loc: Option[Loc] = None
+	  def setLoc(loc: Loc) = {this.loc = Some(loc)}
+	  def getLoc: Loc = loc.get
+  }
+  
+  case class Name(name: String) extends ParsedNode
+  
+  abstract class Pattern extends ParsedNode 
   case class SimpleIdent(val name: String) extends Pattern
   case class TuplePattern(lst: List[Pattern]) extends Pattern
   case class ClassPattern(val className: String, val lst: List[Pattern]) extends Pattern  
   
-  
-  trait Expr
+  abstract class Expr extends ParsedNode
   
   case class Number(val value: Int) extends Expr
+  
   case class Bool(val value: Boolean) extends Expr
   case class StringExpr(val value: String) extends Expr
   
@@ -19,7 +27,26 @@ object ExpressionParser{
   case class Ident(val name: String) extends Expr
   case class PatternIdent(val pattern: Pattern) extends Expr
   
-  case class BinOp(val name: String, val operand1: Expr, val operand2: Expr) extends Expr
+	object BinOp extends Enumeration with ParsedNode {
+	  val Plus, Minus, Mult, Div, Mod, Lt, Gt, LtEq, GtEq, Eq, Neq  = Value
+	  def fromString(name: String) = {
+	    name match {
+	      case "+" => Plus
+	      case "-" => Minus
+	      case "*" => Mult
+	      case "/" => Div
+	      case "%" => Mod
+	      case "<" => Lt
+	      case ">" => Gt
+	      case "<=" => LtEq
+	      case ">=" => GtEq
+	      case "==" => Eq
+	      case "!=" => Neq
+	    }
+	  }
+	}
+  
+  case class BinOp(val name: BinOp.Value, val operand1: Expr, val operand2: Expr) extends Expr
   case class UnaryOp(val name: String, val operand: Expr) extends Expr
   case class TupleN(val operands: List[Expr]) extends Expr
   case class FunApp(val expr: Expr, val operands: List[Expr]) extends Expr
@@ -31,32 +58,44 @@ object ExpressionParser{
   case class IfThenExpr(val cond: Expr, val ifStmt: Expr) extends Expr
   case class IfThenElseExpr(val cond: Expr, val ifStmt: Expr, val elseStmt: Expr) extends Expr  
   case class WhileExpr(val cond: Expr, val body: Expr) extends Expr 
-  case class ListInit(val lst: List[Expr]) extends Expr
+  case class ListInit(val values: List[Expr]) extends Expr
   case class AssgnmentStmt(val lhs: Expr, val rhs: Expr) extends Expr
   
   //to do: introduce definitions
-  trait Def
+  abstract class Def extends ParsedNode{
+    def getName: String
+  }
   
-  case class ClassDef(val name: String, args: List[String]) extends Def
-  case class FunDef(val name: String, args: List[String], body: Expr) extends Def 
-  case class ModuleDef(val name: String, defs: List[Def]) extends Def
+  case class ClassDef(val ident: Name, args: List[String]) extends Def{
+	   def getName = ident.name //.name
+  }
+  case class FunDef(val ident: Name, args: List[String], body: Expr) extends Def{
+	   def getName = ident.name //.name
+  } 
+  case class ModuleDef(val ident: Name, defs: List[Def]) extends Def{
+       def getName = ident.name //.name
+  }
   
-  case class Program(modules: List[Def]) extends Def
+  case class Program(val defs: List[Def]) extends Def{
+	  def getName = "<program>"
+  }
   
   
   object Implicits{
+	  val noLoc = Loc(0, 0)
+	  
 	  class ExprWithOp[A <: Expr](thisExpr: A) {
-	    def +[B <: Expr](that: B): Expr = BinOp("+", thisExpr, that)  
-	    def -(that: Expr): Expr = BinOp("-", thisExpr, that) 
-	    def *(that: Expr): Expr = BinOp("*", thisExpr, that)  
-	    def /(that: Expr): Expr = BinOp("/", thisExpr, that)  
-	   	def %(that: Expr): Expr = BinOp("%", thisExpr, that)   
-	   	def <(that: Expr): Expr = BinOp("<", thisExpr, that)
-	   	def >(that: Expr): Expr = BinOp(">", thisExpr, that)  
-	   	def <= (that: Expr): Expr = BinOp("<=", thisExpr, that)  	 
-	   	def >= (that: Expr): Expr = BinOp(">=", thisExpr, that)  	 
-	   	def === (that: Expr): Expr = BinOp("==", thisExpr, that)  	 
-	   	def !== (that: Expr): Expr = BinOp("!=", thisExpr, that)  	  
+	    def +[B <: Expr](that: B): Expr = BinOp(BinOp.Plus, thisExpr, that)  
+	    def -(that: Expr): Expr = BinOp(BinOp.Minus, thisExpr, that) 
+	    def *(that: Expr): Expr = BinOp(BinOp.Mult, thisExpr, that)  
+	    def /(that: Expr): Expr = BinOp(BinOp.Div, thisExpr, that)  
+	   	def %(that: Expr): Expr = BinOp(BinOp.Mod, thisExpr, that)   
+	   	def <(that: Expr): Expr = BinOp(BinOp.Lt, thisExpr, that)
+	   	def >(that: Expr): Expr = BinOp(BinOp.Gt, thisExpr, that)  
+	   	def <= (that: Expr): Expr = BinOp(BinOp.LtEq, thisExpr, that)  	 
+	   	def >= (that: Expr): Expr = BinOp(BinOp.GtEq, thisExpr, that)  	 
+	   	def === (that: Expr): Expr = BinOp(BinOp.Eq, thisExpr, that)  	 
+	   	def !== (that: Expr): Expr = BinOp(BinOp.Neq, thisExpr, that)  	  
 	   	
 	   	def unary_+ : Expr = UnaryOp("+", thisExpr)   	
 	   	def unary_- : Expr = UnaryOp("-", thisExpr) 
@@ -73,26 +112,39 @@ object ExpressionParser{
 	  implicit def toExprWithOp[A <: Expr](expr: A) = new ExprWithOp(expr)  
   }
   
+  def setLoc[A <: ParsedNode](p: Parser[A]): Parser[A] = 
+  pWithLocation(p, {
+    (res: A, loc) => {res.setLoc(loc); res} 
+  } )
+      
+  object withLoc{
+    def <| [A <: ParsedNode](p: Parser[A]): Parser[A] = setLoc(p)
+  }
+  
   //Bind(x,value)
   def exprParser(): (Parser[Expr], Parser[Program]) = {
     //see http://introcs.cs.princeton.edu/java/11precedence/ for operator precedence
 
+    
     val (pExprRef, pExpr) = pRef[Expr]() //forward declaration of expr parser
     
     val pIdentName = pSetLastError("identifier", pRegexp("""[a-zA-Z][a-zA-Z0-9]*"""))
     
+    val pIdentName2 = withLoc <| pIdentName.map(name => Name(name))
+        
     val (kwFun, kwIf, kwWhile, kwModule, kwClass, kwLet, kwVar) = ("fun", "if", "while", "module", "class", "let", "var")
     val (kwTrue, kwFalse) = ("true", "false")
     
     val keywords = Set(kwFun, kwIf, kwWhile, kwModule, kwClass, kwTrue, kwFalse)
     
-    val pIdent: Parser[Expr] = pIdentName.bind(ident => 
-      						   if (keywords.contains(ident)) pFail("not a valid ident") 
-      						   else pReturn(Ident(ident)))
+    val pIdent: Parser[Ident] = 
+      		setLoc(pIdentName.bind(ident => 
+      						   if (keywords.contains(ident)) pFail("not a valid ident") //to do: pFailWithLoc 
+      						   else pReturn(Ident(ident))) )
       						   
-    def pKeyword(kw: String) = pRegexp("""[a-zA-Z]+""").bind(name => if (name == kw) pReturn(Unit) else pFail("keyword " + kw))
+    def pKeyword(kw: String) = pRegexp("""[a-zA-Z]+""").bind(name => if (name == kw) pReturnEmpty else pFail("keyword " + kw))
     
-    val pComma: Parser[Unit] = pString(",").bind(_ => pReturn(())) //to do: ignore
+    val pComma: Parser[Unit] = pString(",").ignore // .bind(info => pReturnEmpty(info.loc))
     val pOpenBracket = pString("(")
     val pCloseBracket = pString(")")
     
@@ -140,37 +192,40 @@ object ExpressionParser{
       	pBracketedListWithSep(pStringIgnore("("), pStringIgnore(")"), pStringIgnore(","), pItem)
       	
     val pArgsDef = roundBracketCommaSep(pIdentName) 
-      			  
-    //class X(a,b,c){
-    val pClassDef: Parser[Def] = 
-      				pKeyword("class").bind(_=> 
-    				pIdentName.bind(name => 
-    				pArgsDef.bind(args =>
-    				pReturn(ClassDef(name, args)))))
+     
+   // def pReturnExpr[A <: Expr](expr: A):Parser[A] = pReturn(expr, expr.loc)
+   // def pReturnDef[A <: Def](adef: A):Parser[A] = pReturn(adef, adef.loc)
     
-    val pNamedFun: Parser[Def] = 
-      				pKeyword("fun").bind(_ =>
-    				pIdentName.bind(name => 
+    //class X(a,b,c){
+    val pClassDef: Parser[Def] = withLoc <|
+      				pKeyword("class").bind(_ => 
+    				pIdentName2.bind(name => 
+    				pArgsDef.bind(args =>
+    				pReturn(ClassDef(name, args))))) 
+    
+    val pNamedFun: Parser[Def] = withLoc <|
+      				pKeyword("fun").bind(fun =>
+    				pIdentName2.bind(ident => 
     				pArgsDef.bind(args =>      
     				pString("=").bind(_ =>
     				pExpr.bind(expr =>
-    				pReturn(FunDef(name, args, expr)))))))  
+    				pReturn(FunDef(ident, args, expr)))))))  
 
     val (pModDefRef, pModuleDef) = pRef[Def]()
     
     val x = pChoice(pModuleDef, pClassDef, pNamedFun) // pModuleDef)
     
-	val pResolvedModuleDef =      			 
-     				pKeyword("module").bind(_ =>
-      				 pIdentName.bind(name =>
+	val pResolvedModuleDef =  withLoc <|
+     				pKeyword("module").bind(mod =>
+      				 pIdentName2.bind(name =>
       				 pString("{").bind(_ =>
       				 pWhile (not(pString("}"))) (x)).bind(defs =>
-      				 pString("}").bind(_ =>
-      				 pReturn(ModuleDef(name, defs))))))   
+      				 pString("}").bind(brk =>
+      				 pReturn(ModuleDef(name, defs))))))
       				 
     pModDefRef.set(pResolvedModuleDef)
 
-    val pProgram = (pWhile(not(pEOF)) (pResolvedModuleDef) ).bind(modDefs => pReturn(Program(modDefs)))
+    val pProgram = (pWhile(not(pEOF)) (pResolvedModuleDef) ).bind(modDefs => pReturn(Program(modDefs))) //fix loc
     
     def anonFunc =
       pKeyword("fun").bind(_ =>
@@ -201,7 +256,8 @@ object ExpressionParser{
     
     val (pPatternRef, pPattern) = pRef[Pattern]() 
     val pListOfPat = pBracketedListWithSep(pStringIgnore("("), pStringIgnore(")"), pStringIgnore(","), pPattern)
-    val pSimpleIdentOrClass = pIdentName.bind(name =>
+    val pSimpleIdentOrClass = withLoc <|
+      		pIdentName.bind(name =>
       						  pIf(lookAhead(pStringIgnore("(")), pListOfPat.bind(lst => pReturn(ClassPattern(name, lst))),
       						     pReturn(SimpleIdent(name))))
       						     
@@ -227,8 +283,8 @@ object ExpressionParser{
 	          //else
 	          pExprOrAssignment)
           
-     
-    val l2 = (letExpr.bind(e => pString(";").bind(_=>pReturn(e))))
+  
+    val l2 = (letExpr.bind(e => opt(pString(";")).bind(_=>pReturn(e))))
     val pExprSeq: Parser[Expr] = 
       pIf(pString("{"), 
            { (pWhile(not(pString("}"))) (l2)).bind(lst =>
@@ -289,7 +345,7 @@ object ExpressionParser{
 				          expr2 <- pBaseParser
 				       } yield (opName, expr2))
       }
-      yield lst.foldLeft(expr0) {case (f0, (op, f1)) =>  BinOp(op, f0, f1)}
+      yield lst.foldLeft(expr0) {case (f0, (op, f1)) =>  BinOp(BinOp.fromString(op), f0, f1)}
 
     def pRecFunApp: Parser[Expr] = {
       val pOpenBracket = pChoice(pString("("), pString("["), pString("."))
@@ -361,14 +417,15 @@ object ExpressionParser{
     
   }
   
-  def testFile(fileName: String){
+  def parseFile(fileName: String): Program = {
     val contents = scala.io.Source.fromFile(fileName).getLines().mkString("\n").replace("\t", "  ")
     println(contents)
     val (pExpr,pProgram) = exprParser()
     Parsers.run(pProgram)(contents) match {
-      case ParserSuccess(result,_) => {println("Success"); println(result)}
+      case ParserSuccess(result,_) => {println("Success"); println(result); result}
       case ParserFailure(error) =>{
-    	  error.printMessage(contents)
+    	  error.printMessage(contents);
+    	  throw new Exception("cannot parse")
       }
     }
   }
@@ -472,18 +529,18 @@ object ExpressionParser{
     	println("Success: " + input + " : " + expr)
     }
     
-    val p1 = Program(List(ModuleDef("X", List(ClassDef("Y", List("a", "b", "c")))))) 
-    val p2 = Program(List(ModuleDef("X", List(FunDef("Y", List("a", "b", "c"), _0)))))
-    val funDefY = FunDef("Y", List("a", "b", "c"), a + b + c)
-    val funDefZ = FunDef("Z", List(), _0)
-    val classM = ClassDef("M", List("a", "b", "c"))
-    val p3 = Program(List(ModuleDef("X", List(funDefY, funDefZ, classM))))    
+    val p1 = Program(List(ModuleDef(Name("X"), List(ClassDef(Name("Y"), List("a", "b", "c")))))) 
+    val p2 = Program(List(ModuleDef(Name("X"), List(FunDef(Name("Y"), List("a", "b", "c"), _0)))))
+    val funDefY = FunDef(Name("Y"), List("a", "b", "c"), a + b + c)
+    val funDefZ = FunDef(Name("Z"), List(), _0)
+    val classM = ClassDef(Name("M"), List("a", "b", "c"))
+    val p3 = Program(List(ModuleDef(Name("X"), List(funDefY, funDefZ, classM))))    
     
-    val modZ = ModuleDef("Z", List(FunDef("K", List(), _1 + b)))
-    val p4 = Program(List(ModuleDef("X", List(funDefY, funDefZ, classM, modZ))))    
+    val modZ = ModuleDef(Name("Z"), List(FunDef(Name("K"), List(), _1 + b)))
+    val p4 = Program(List(ModuleDef(Name("X"), List(funDefY, funDefZ, classM, modZ))))    
     
     val testCasesDef: List[(String, Program)] = List( 
-        "module X{}" -> Program(List(ModuleDef("X", List()))),
+        "module X{}" -> Program(List(ModuleDef(Name("X"), List()))),
      """|module X{
         |	class Y(a,b,c)	
   		|}""".stripMargin -> p1,
@@ -539,7 +596,7 @@ object ExpressionParser{
     
     val p1 = pString("inp")
     val p2 = pString("ut")
-    val p3 = p1 ==> p2 ==> p1 //chain(p1,p2)
+    val p3 = p1 // p1 ==> p2 ==> p1 //chain(p1,p2)
     def f(xy: (Unit, Unit)): Unit = ()
     //val p4 = map(p3, f)
     //java.lang.Integer.parseInt(arg0)

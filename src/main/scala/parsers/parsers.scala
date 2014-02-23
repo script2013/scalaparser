@@ -6,10 +6,29 @@ import java.util.Scanner
 import scala.util.matching.Regex
 import scala.annotation.tailrec
 import scala.collection.mutable.ArrayBuffer
+
+  class Loc(val fromPos: Int, val toPos: Int){
+	override def toString() = s"Loc($fromPos, $toPos)"
+  }
   
+  object Loc{
+	def apply(fromPos: Int, toPos: Int): Loc = new Loc(fromPos, toPos)
+	def combine(fromLoc: Loc, toLoc: Loc): Loc = new Loc(fromLoc.fromPos, toLoc.toPos)
+  }
+
+/*
+  class ParseInfo[+A](val value: A){
+	def loc: Loc = Loc(0, 0)
+  }
+
+  object ParseInfo{
+    def apply[A](value: A): ParseInfo[A] = new ParseInfo(value)
+    def apply[A](value: A, loc: Loc): ParseInfo[A] = new ParseInfo(value)    
+  }
+  */
   case class ParserState(buffer: ArrayCharSequence, inputPos: Int) {
     val pos = getNonWhitespacePos(inputPos)
-    
+    def getPos = pos
     def matchEOF: Option[ParserState] = {
         if (pos >= buffer.length)
           Some(this)
@@ -64,8 +83,6 @@ import scala.collection.mutable.ArrayBuffer
 	        i += 1
 	      }        
       }
-      
-
       
       i
     }
@@ -174,14 +191,14 @@ import scala.collection.mutable.ArrayBuffer
     def failure: ParserError
     def isSuccess: Boolean
   }
-  
-  
 
-  final case class ParserSuccess[+A](result: A, next: ParserState) extends ParserResult[A]{
+  case class ParserSuccess[+A](result: A, next: ParserState) extends ParserResult[A]{
         def success: A = result
         def failure: ParserError = throw new Exception("parser succeeded")
         def isSuccess = true
   }
+  
+  class ParserSuccessWithLoc[+A](result: A, next: ParserState, loc: Loc) extends ParserSuccess[A](result, next)
 
   final case class ParserFailure(error: ParserError) extends ParserResult[Nothing]{
         def success: Nothing = throw new Exception("Parser failed at pos " + error.pos + " with errors: " + error.stack.reverse.mkString(", "))
@@ -223,9 +240,11 @@ import scala.collection.mutable.ArrayBuffer
           failure
         }
        })
-       
+    
+    def ignore(): Parser[Unit] = pEmpty.bind(res => pReturn(Unit))
+    
     def flatMap[B](f: A => Parser[B]):  Parser[B] = bind(f)
-    def ==>[B](p2: Parser[B]): Parser[(A,B)] = Parsers.chain(this, p2)
+    //def ==>[B](p2: Parser[B]): Parser[(A,B)] = Parsers.chain(this, p2)
   }
   
   class ParserRef[A](){
@@ -235,6 +254,22 @@ import scala.collection.mutable.ArrayBuffer
   }  
 
   def pReturn[A](value: A): Parser[A] = Parser(state => ParserSuccess(value, state))
+  
+  def pWithLocation[A, B](p: Parser[A], f:(A, Loc) => B): Parser[B] = Parser(state => {
+    val startPos = state.getPos
+   	p.run(state) match{
+      case ParserSuccess(result, state) => {
+    	val endPos = state.getPos
+    	val loc = Loc(startPos, endPos)
+        ParserSuccess(f(result, loc), state)
+      }
+      case failure@ParserFailure(_) => failure
+    }})
+  
+  //def pReturn[A](value: A, loc: Loc): Parser[A] = Parser(state => ParserSuccess(ParseInfo(value, loc), state))
+  def pReturnEmpty(): Parser[Unit] = pReturn(Unit)
+  //def pReturnEmpty(loc: Loc): Parser[Unit] = pReturn(ParseInfo(Unit, loc))
+  
   def pFail(msg: String): Parser[Nothing] = Parser(state => ParserFailure(ParserError(state.pos, List(msg))))
   /*
   def pWhile1[A] (cond: Parser[A]) (body: A => Parser[Unit]): Parser[Unit] =  Parser(state =>
@@ -289,7 +324,7 @@ import scala.collection.mutable.ArrayBuffer
                   }
           case failure@ParserFailure(_) => {
         	  //println("while: " + name + " pos: " + state.pos)
-        	  ParserSuccess((), state) 
+        	  ParserSuccess(Unit, state) 
           }
         }
       Parser(loop)}
@@ -301,7 +336,7 @@ import scala.collection.mutable.ArrayBuffer
 		   				       body(it0).
 		   				       bind(item => 
 			  		           {res += ((it0,item)); 
-			  		           pReturn()}))).
+			  		           pReturnEmpty}))).
 	     bind(_=> pReturn(res.toList))}) 
 	  }
      
@@ -311,7 +346,7 @@ import scala.collection.mutable.ArrayBuffer
 		 (pWhileInternal ("") (cond) (it0 =>
 		   				       body.bind(item => 
 			  		           {res += item; 
-			  		           pReturn()}))).
+			  		           pReturnEmpty}))).
 	     bind(_=> pReturn(res.toList))}) 
 	  }
   
@@ -370,6 +405,13 @@ import scala.collection.mutable.ArrayBuffer
   def pChoice5[A0 <: R, A1 <: R, A2 <: R, A3 <: R, A4 <: R, R](p0: Parser[A0], p1: Parser[A1], p2: Parser[A2], p3: Parser[A3], p4: Parser[A4]): Parser[R] =
     pChoice2(p0, pChoice4(p1, p2, p3, p4))   
    */
+  def opt[A](p: Parser[A]): Parser[Option[A]] = Parser(state =>{
+	  p.run(state) match{
+	    case ParserSuccess(result, next) => ParserSuccess(Some(result), next)
+	    case failure@ParserFailure(error) => ParserSuccess(None, state)
+	  }
+  })
+  
   def pChoice[A](ps: Parser[A]*): Parser[A] = Parser(state => {
     //val state = state0.newState(state0.pos)
     val iter = ps.iterator
@@ -411,14 +453,14 @@ import scala.collection.mutable.ArrayBuffer
     )
   }
   
-  def pStringIgnore(expected: String) = pString(expected).bind(_=> pReturn(()))
+  def pStringIgnore(expected: String) = pString(expected).bind(_=> pReturnEmpty)
 
-  val pEmpty: Parser[Unit] = Parser(state => ParserSuccess((), state))
+  val pEmpty: Parser[Unit] = Parser(state => ParserSuccess(Unit, state))
   
   
   val pEOF: Parser[Unit] = Parser(state => 
       state.matchEOF match {
-          case Some(newState) => ParserSuccess((), newState)
+          case Some(newState) => ParserSuccess(Unit, newState)
           case None => failWith(state.pos, "end of file")
       }
     )
@@ -448,15 +490,16 @@ import scala.collection.mutable.ArrayBuffer
       })      
   
   val pWhitespaceAny = Parser(state =>
-    ParserSuccess((), state.skipWhiteSpace)
+    ParserSuccess(Unit, state.skipWhiteSpace)
   )
   
+
   def map[A, B](p: Parser[A], f: A => B): Parser[B] = Parser(state =>
     p.run(state) match{
       case ParserSuccess(result, state) => ParserSuccess(f(result), state)
       case failure@ParserFailure(_) => failure
     })
-  
+    /*
   def chain[A, B] (p1: Parser[A], p2: Parser[B]): Parser[(A,B)] = Parser(state0 =>
     p1.run(state0) match {
       case ParserSuccess(result1, state1) => 
@@ -466,7 +509,7 @@ import scala.collection.mutable.ArrayBuffer
         }
       case failure@ParserFailure(_) => failure
     })
-
+*/
     
   def run[A](parser: Parser[A])(input: String): ParserResult[A] = {
     val state = ParserState(ArrayCharSequence.fromString(input), 0)
